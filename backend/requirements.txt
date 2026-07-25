@@ -1,0 +1,19 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.38
+psycopg[binary]==3.2.5
+pydantic-settings==2.8.1
+PyJWT==2.10.1
+passlib[bcrypt]==1.7.4
+# passlib 1.7.4 is not compatible with bcrypt 5.x during backend detection.
+bcrypt==4.0.1
+email-validator==2.2.0
+celery[redis]==5.4.0
+redis==5.2.1
+qdrant-client==1.13.2
+openai==1.68.2
+gitpython==3.1.44
+tree-sitter==0.24.0
+tree-sitter-language-pack==0.6.0
+pytest==8.3.5
+httpx==0.28.1
