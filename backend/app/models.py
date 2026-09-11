@@ -1,6 +1,6 @@
 from datetime import datetime
 from uuid import uuid4
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, JSON, Boolean, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, JSON, Boolean, func, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -14,9 +14,10 @@ class User(Base):
 
 class Repository(Base):
     __tablename__ = "repositories"
+    __table_args__ = (UniqueConstraint("owner_id", "url", name="uq_owner_repo_url"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    url: Mapped[str] = mapped_column(String(2048), unique=True)
+    url: Mapped[str] = mapped_column(String(2048), index=True)
     name: Mapped[str] = mapped_column(String(255))
     default_branch: Mapped[str] = mapped_column(String(255), default="main")
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)

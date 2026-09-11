@@ -18,13 +18,24 @@ def chunks_for_file(path: Path, root: Path) -> Iterator[dict]:
     if path.stat().st_size > 1_000_000: return
     try: text = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError): return
-    lines, matches = text.splitlines(), list(SYMBOL.finditer(text))
-    offsets = [0]
-    for line in lines: offsets.append(offsets[-1] + len(line) + 1)
-    starts = [text[:m.start()].count("\n") + 1 for m in matches] or [1]
-    names = [m.group(1) for m in matches] or [None]
+    lines = text.splitlines()
+    if not lines: return
+
+    matches = list(SYMBOL.finditer(text))
+    starts = [text[:m.start()].count("\n") + 1 for m in matches]
+    names = [m.group(1) for m in matches]
+
+    # If first symbol starts after line 1, include the module header/imports
+    if starts and starts[0] > 1:
+        starts.insert(0, 1)
+        names.insert(0, None)
+    elif not starts:
+        starts = [1]
+        names = [None]
+
     for index, start in enumerate(starts):
         end = starts[index + 1] - 1 if index + 1 < len(starts) else len(lines)
+        if start > end: continue
         # modules and oversized symbols are segmented with line overlap.
         for segment_start in range(start, end + 1, 180):
             segment_end = min(end, segment_start + 219)
@@ -40,33 +51,89 @@ class Embedder:
         norm = math.sqrt(sum(v*v for v in values)) or 1
         return [v / norm for v in values]
 
+_qdrant_client = None
+_qdrant_available = None
+
 class VectorStore:
     collection = "code_chunks_v1"
-    def __init__(self):
-        self.client = QdrantClient(url=settings().qdrant_url)
-        try: self.client.get_collection(self.collection)
-        except Exception: self.client.create_collection(self.collection, vectors_config=VectorParams(size=Embedder.dimension, distance=Distance.COSINE))
+
+    @classmethod
+    def get_client(cls):
+        global _qdrant_client, _qdrant_available
+        if _qdrant_client is not None:
+            return _qdrant_client if _qdrant_available else None
+        
+        qdrant_url = settings().qdrant_url
+        try:
+            client = QdrantClient(url=qdrant_url, timeout=0.2)
+            client.get_collection(cls.collection)
+            _qdrant_client = client
+            _qdrant_available = True
+            return _qdrant_client
+        except Exception:
+            try:
+                client = QdrantClient(url=qdrant_url, timeout=0.2)
+                client.create_collection(cls.collection, vectors_config=VectorParams(size=Embedder.dimension, distance=Distance.COSINE))
+                _qdrant_client = client
+                _qdrant_available = True
+                return _qdrant_client
+            except Exception:
+                _qdrant_available = False
+                _qdrant_client = None
+                return None
+
     def upsert(self, chunk: CodeChunk):
         self.upsert_many([chunk])
+
     def upsert_many(self, chunks: list[CodeChunk]):
         if not chunks: return
-        embedder = Embedder()
-        points = []
-        for chunk in chunks:
-            payload = {"repository_id": chunk.repository_id, "path": chunk.path, "start_line": chunk.start_line, "end_line": chunk.end_line, "symbol_name": chunk.symbol_name or ""}
-            points.append(PointStruct(id=chunk.id, vector=embedder.embed(chunk.content), payload=payload))
-        self.client.upsert(self.collection, points)
+        client = self.get_client()
+        if not client: return
+        try:
+            embedder = Embedder()
+            points = []
+            for chunk in chunks:
+                payload = {"repository_id": chunk.repository_id, "path": chunk.path, "start_line": chunk.start_line, "end_line": chunk.end_line, "symbol_name": chunk.symbol_name or ""}
+                points.append(PointStruct(id=chunk.id, vector=embedder.embed(chunk.content), payload=payload))
+            client.upsert(self.collection, points)
+        except Exception:
+            pass
+
     def semantic(self, repo_id: str, query: str, limit: int = 20):
-        return self.client.query_points(self.collection, query=Embedder().embed(query), query_filter=Filter(must=[FieldCondition(key="repository_id", match=MatchValue(value=repo_id))]), limit=limit).points
+        client = self.get_client()
+        if not client: return []
+        try:
+            return client.query_points(self.collection, query=Embedder().embed(query), query_filter=Filter(must=[FieldCondition(key="repository_id", match=MatchValue(value=repo_id))]), limit=limit).points
+        except Exception:
+            return []
 
 def hybrid_search(db: Session, repo_id: str, query: str, limit: int = 8) -> list[tuple[CodeChunk, float]]:
     rows = db.scalars(select(CodeChunk).where(CodeChunk.repository_id == repo_id)).all()
+    if not rows: return []
+
     terms = set(re.findall(r"\w+", query.lower()))
     keyword = sorted(rows, key=lambda c: sum(c.content.lower().count(t) for t in terms), reverse=True)
     ranked: dict[str, float] = {}
-    for rank, chunk in enumerate(keyword[:30], 1): ranked[chunk.id] = ranked.get(chunk.id, 0) + 1 / (60 + rank)
-    try:
-        for rank, point in enumerate(VectorStore().semantic(repo_id, query), 1): ranked[str(point.id)] = ranked.get(str(point.id), 0) + 1 / (60 + rank)
-    except Exception: pass
+    for rank, chunk in enumerate(keyword[:30], 1):
+        score = sum(chunk.content.lower().count(t) for t in terms)
+        if score > 0:
+            ranked[chunk.id] = ranked.get(chunk.id, 0) + 1 / (60 + rank)
+    
+    # 1. Semantic query against Qdrant if running
+    qdrant_points = VectorStore().semantic(repo_id, query)
+    if qdrant_points:
+        for rank, point in enumerate(qdrant_points, 1):
+            ranked[str(point.id)] = ranked.get(str(point.id), 0) + 1 / (60 + rank)
+    else:
+        # 2. Resilient local in-memory cosine similarity fallback
+        embedder = Embedder()
+        q_vec = embedder.embed(query)
+        def cosine_sim(chunk: CodeChunk) -> float:
+            c_vec = embedder.embed(chunk.content)
+            return sum(a * b for a, b in zip(q_vec, c_vec))
+        vector_ranked = sorted(rows, key=cosine_sim, reverse=True)
+        for rank, chunk in enumerate(vector_ranked[:20], 1):
+            ranked[chunk.id] = ranked.get(chunk.id, 0) + 1 / (60 + rank)
+
     by_id = {c.id: c for c in rows}
     return [(by_id[id_], score) for id_, score in sorted(ranked.items(), key=lambda x: x[1], reverse=True)[:limit] if id_ in by_id]
