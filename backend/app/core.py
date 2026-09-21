@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-flash-latest"
 
     groq_api_key: str | None = None
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "gemma2-9b-it"
 
     openrouter_api_key: str | None = None
     openrouter_model: str = "nex-agi/nex-n2.5-mini:free"

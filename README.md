@@ -1,214 +1,166 @@
-# ◈ RepoSage
+# ◈ RepoSage: Autonomous Repository Intelligence
 
-RepoSage is an AI-powered GitHub repository intelligence platform. It ingests public repositories, analyzes and indexes source-aware code chunks using AST symbol classification, and leverages hybrid search with reciprocal-rank fusion (RRF) to provide accurate, cited technical answers to questions about the codebase.
+> One-line pitch: RepoSage transforms static GitHub repositories into dynamic, queryable intelligence engines using hybrid RRF search and symbol-aware AST chunking.
+
+[![Live Demo](https://img.shields.io/badge/Live-Demo-blue?style=for-the-badge)](https://your-demo-link.com) <!-- Replace with real demo link -->
+
+![Demo Screenshot/GIF](https://via.placeholder.com/800x400?text=App+Screenshot+or+GIF+Here) <!-- Replace with actual screenshot/GIF -->
 
 ---
 
 ## 🚀 Key Features
 
-*   **Repository Ingestion:** Clones public GitHub repositories in the background using shallow clones (`depth=1`) via Celery.
-*   **Symbol-Aware Chunking:** Parses codebases to extract symbols (functions, classes, etc.) and modules using regex-based AST extraction, segmenting files into logical chunks with line overlap.
-*   **Hybrid Search engine:** Combines PostgreSQL full-text keyword retrieval (frequency overlap) with Qdrant semantic vector search.
-*   **Reciprocal-Rank Fusion (RRF):** Fuses keyword search results and semantic search scores to rank code sections with superior precision.
-*   **Source Citation & Line Referencing:** Traces and highlights exact file paths, line ranges, symbols, and languages in search and chat responses.
-*   **Streaming Chat Answers:** Streams completions in real-time using a Server-Sent Events (SSE) protocol.
-*   **Offline Fallback:** Features a stable, local hash-based bag-of-words embedding generator (`Embedder`) that allows the platform to function without external LLM keys.
+*   **Symbol-Aware AST Chunking:** Uses Tree-sitter to semantically parse codebases, extracting functions, classes, and imports for logical, context-rich chunks.
+*   **Hybrid Search with RRF:** Combines Qdrant semantic vector search with PostgreSQL keyword search, fused via Reciprocal Rank Fusion for pinpoint accuracy.
+*   **Real-time Streaming Answers:** Delivers LLM responses instantly via Server-Sent Events (SSE), complete with citations to exact file paths and line numbers.
+*   **Offline Mode / Bring Your Own Model:** Operates with OpenAI, Gemini, Groq, DeepSeek, or local Ollama models. Includes a fallback offline Embedder if LLM keys are absent.
+*   **Background Ingestion Engine:** Asynchronously clones and indexes public repositories using Celery and Redis without blocking the API.
 
 ---
 
 ## 🏗️ System Architecture
 
+### Ingestion Flow
 ```mermaid
-flowchart TD
-    subgraph Client
-        UI[Next.js Frontend]
-    end
-
-    subgraph API Gateway / Orchestration
-        API[FastAPI Backend]
-    end
-
-    subgraph Messaging & Task Queue
-        Redis[(Redis Queue)]
-        Workers[Celery Workers]
-    end
-
-    subgraph Storage Layer
-        DB[(PostgreSQL)]
-        Qdrant[(Qdrant Vector DB)]
-    end
-
-    subgraph External
-        GitHub[GitHub API / Git]
-        LLM[OpenAI API]
-    end
-
-    UI <-->|REST / SSE| API
-    API <--> DB
-    API <--> Qdrant
-    API -->|Enqueue Jobs| Redis
-    Redis <--> Workers
-    Workers -->|Clone| GitHub
-    Workers --> DB
-    Workers --> Qdrant
-    API -->|Generate Chat| LLM
+sequenceDiagram
+    participant User
+    participant API
+    participant Celery
+    participant DB as PostgreSQL
+    participant Vector as Qdrant
+    
+    User->>API: POST /api/v1/repositories (GitHub URL)
+    API->>DB: Create Repo Record (Status: Queued)
+    API->>Celery: Enqueue Indexing Task
+    API-->>User: Returns Repo ID
+    Celery->>GitHub: Shallow Clone (depth=1)
+    Celery->>Celery: Parse AST & Chunk Code (Tree-sitter)
+    Celery->>Celery: Generate Embeddings
+    Celery->>DB: Store Chunks & Metadata
+    Celery->>Vector: Upsert Vector Embeddings
+    Celery->>DB: Update Repo Status (Ready)
 ```
 
-### Core Architecture Components
-
-1.  **Frontend Dashboard:** A sleek Next.js (React 19) app built with TypeScript, TanStack React Query, Zustand for global state, and custom responsive styling.
-2.  **FastAPI REST Server:** Serves HTTP API endpoints for authorization, repository registration, indexing status, database search, and streaming LLM chat.
-3.  **Relational database (PostgreSQL):** Stores users, repo metadata, code-chunk relationships, imports, exports, and language distribution statistics.
-4.  **Vector database (Qdrant):** Houses high-dimensional vector embeddings of the chunked code alongside filterable payloads (e.g. `repository_id`, `path`, `symbol_name`).
-5.  **Task Processor (Celery & Redis):** Runs cloning, file traversal, and database indexing in asynchronous background processes.
+### Query Flow
+```mermaid
+sequenceDiagram
+    participant User
+    participant API
+    participant DB as PostgreSQL
+    participant Vector as Qdrant
+    participant LLM
+    
+    User->>API: POST /api/v1/repositories/{id}/chat (Query)
+    API->>API: Generate Query Embedding
+    par Semantic Search
+        API->>Vector: Vector Search
+    and Keyword Search
+        API->>DB: Full-Text Search
+    end
+    API->>API: Reciprocal Rank Fusion (RRF)
+    API->>LLM: Stream Prompt with Top Context Chunks
+    LLM-->>API: Stream LLM Tokens
+    API-->>User: SSE Stream (Citations + Answer)
+```
 
 ---
 
 ## 🛠️ Technology Stack
 
-| Component | Technology | Version / Details |
+| Category | Technology | Details |
 | :--- | :--- | :--- |
-| **Frontend Framework** | [Next.js](https://nextjs.org/) / React | `15.2.2` / `^19.0.0` |
-| **State & Fetching** | [Zustand](https://github.com/pmndrs/zustand) / [React Query](https://tanstack.com/query) | `^5.0.3` / `^5.66.9` |
-| **Backend Framework** | [FastAPI](https://fastapi.tiangolo.com/) | `0.115.12` |
-| **Task Queue** | [Celery](https://docs.celeryq.dev/) with [Redis](https://redis.io/) | Celery `5.4.0` / Redis `5.2.1` |
-| **Vector DB** | [Qdrant](https://qdrant.tech/) | Client `1.13.2` / Docker `v1.13.4` |
-| **Relational DB** | [PostgreSQL](https://www.postgresql.org/) / [SQLAlchemy](https://www.sqlalchemy.org/) | PostgreSQL 16 Alpine / SQLAlchemy `2.0.38` |
-| **AST & Git Client** | [Tree-sitter](https://tree-sitter.github.io/tree-sitter/) / [GitPython](https://gitpython.readthedocs.io/) | tree-sitter `0.24.0` / GitPython `3.1.44` |
-| **Security** | PyJWT / passlib / bcrypt | JWT auth, hashed credentials |
+| **Frontend** | Next.js 15, React 19, Zustand, Tailwind | Responsive SPA, SSE Streaming Client |
+| **Backend** | FastAPI, Python 3.12 | REST API, Dependency Injection, Streaming |
+| **Task Queue**| Celery, Redis | Async repository cloning & indexing |
+| **Database** | PostgreSQL, SQLAlchemy 2 | Relational data, Keyword search |
+| **Vector DB** | Qdrant | Fast, scalable semantic similarity search |
+| **Parsing** | Tree-sitter | Multi-language AST parsing for code chunks|
 
 ---
 
-## 📂 Project Directory Structure
+## 📊 Evaluation Results
 
-```text
-├── backend/
-│   ├── Dockerfile                  # Python container build configuration
-│   ├── requirements.txt            # Python dependencies (FastAPI, Celery, SQLAlchemy, etc.)
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── core.py                 # Configuration settings (Pydantic Settings)
-│   │   ├── db.py                   # SQLAlchemy engine and session dependency
-│   │   ├── indexer.py              # Repository cloner, parser, database & Qdrant upserts
-│   │   ├── main.py                 # FastAPI application, route declarations, lifespan hook
-│   │   ├── models.py               # SQLAlchemy Database schemas (User, Repository, CodeChunk)
-│   │   ├── schemas.py              # Pydantic schemas for request/response serialization
-│   │   ├── security.py             # Cryptography helper functions (Bcrypt context, JWT generation)
-│   │   ├── services.py             # AST parsing, local 64-dim Embedder, Qdrant client, Hybrid Search
-│   │   └── worker.py               # Celery app initialization and task definition
-│   └── tests/
-│       └── test_api.py             # Pytest API test cases (health, authentication checks)
-├── frontend/
-│   ├── Dockerfile                  # Node frontend builder
-│   ├── package.json                # Next.js, React, React-Query, Zustand dependencies
-│   ├── tsconfig.json               # TypeScript config
-│   ├── next.config.ts              # Next.js routing and config
-│   └── app/
-│       ├── layout.tsx              # Root HTML context provider
-│       ├── page.tsx                # Single-page client dashboard (Auth & Chat UI)
-│       └── styles.css              # Custom styling sheet (Aesthetic dark mode typography)
-├── docs/
-│   ├── architecture.md             # High-level architecture flowcharts and ERD
-│   ├── deployment.md               # Production infrastructure and secret configuration rules
-│   └── development.md              # Local non-docker flow guidelines
-├── docker-compose.yml              # Standard orchestrator setup containing DBs, Cache, App, Worker
-├── .env.example                    # Sample configuration variables template
-└── README.md                       # Comprehensive project documentation
-```
+<!-- Placeholder for /eval results -->
+| Metric | Result | Target |
+| :--- | :--- | :--- |
+| **Precision@K** | [Waiting for metrics] | > 85% |
+| **Recall@K** | [Waiting for metrics] | > 90% |
+| **Latency (P95)** | [Waiting for metrics] | < 500ms |
+
+*(Note: Replace the above table with the real metrics from the `/eval` results)*
 
 ---
 
-## 💾 Core Database Model
+## ⚙️ Setup Instructions
 
-The platform uses a relational database schema for user management, indexing state tracking, and keyword filtering:
+### 🐳 Docker (Recommended)
 
-*   **Users (`users`):** Keeps credential hashes (`password_hash`), administration status (`is_admin`), and registration details.
-*   **Repositories (`repositories`):** Saves the GitHub repository HTTP address, name, current git branch, indexing status (`queued`, `indexing`, `ready`, or `failed`), and stats JSON containing file language distribution and code chunk counts.
-*   **CodeChunks (`code_chunks`):** Retains individual code blocks with metadata including path origin, target branch, AST extracted symbol names, symbol classification (`symbol` or `module`), start/end lines, imports array, exports array, commit hexsha, and embedding model versions.
+1. **Environment Variables:**
+   ```bash
+   cp .env.example .env
+   # Add your LLM keys (e.g., OPENAI_API_KEY) in the .env file.
+   ```
+2. **Launch Services:**
+   ```bash
+   docker compose up --build
+   ```
+3. **Access:**
+   * Frontend: `http://localhost:3000`
+   * Backend Docs: `http://localhost:8000/docs`
 
----
+### 💻 Local Development
 
-## 🔌 API Endpoints
-
-### 🔐 Authentication
-*   `POST /api/v1/auth/register` - Registers a new user. Returns a JWT access token.
-*   `POST /api/v1/auth/login` - Validates user credentials. Returns a JWT access token.
-*   `GET /api/v1/auth/me` - Retrieves account profile details of the currently authenticated user.
-
-### 📁 Repositories
-*   `GET /api/v1/repositories` - Lists repositories registered under the active user.
-*   `POST /api/v1/repositories` - Registers a public GitHub repository. Enqueues a Celery indexing task.
-*   `GET /api/v1/repositories/{id}` - Returns the current indexing status and details of a repository.
-*   `DELETE /api/v1/repositories/{id}` - Deletes a repository and associated indexed chunks.
-*   `POST /api/v1/repositories/{id}/index` - Forces repository re-indexing (synchronous processing if Celery is offline).
-
-### 🔍 Search & QA
-*   `GET /api/v1/repositories/{id}/search?q={query}` - Returns the top `8` code snippets sorted by reciprocal-rank fusion.
-*   `POST /api/v1/repositories/{id}/chat` - Sends a query and returns a Server-Sent Events stream containing cited source lines and the assistant reply.
-
----
-
-## ⚙️ Quick Start
-
-### Prerequisites
-*   [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/)
-
-### Running with Docker Compose
-1.  **Configure Environment Variables:**
-    Copy the sample environment configuration:
-    ```bash
-    cp .env.example .env
-    ```
-    Set your `OPENAI_API_KEY` (if utilizing OpenAI models for advanced chat; falls back gracefully to deterministic local search if empty).
-
-2.  **Start Services:**
-    Build and launch the containers:
-    ```bash
-    docker compose up --build
-    ```
-
-3.  **Access the Applications:**
-    *   **Frontend Dashboard:** `http://localhost:3000`
-    *   **Backend OpenAPI / Swagger Docs:** `http://localhost:8000/docs`
+1. **Start Infrastructure:** Run PostgreSQL, Redis, and Qdrant locally. Update `.env` with their connection URIs.
+2. **Backend:**
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   uvicorn app.main:app --reload --port 8000
+   # In another terminal:
+   celery -A app.worker.celery_app worker --loglevel=INFO
+   ```
+3. **Frontend:**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
 
 ---
 
-## 🔧 Local Development Setup
+## 🔌 API Overview
 
-If you prefer to run the applications locally without Docker:
+*   `POST /api/v1/auth/register` & `login`: JWT Authentication.
+*   `POST /api/v1/repositories`: Ingest a new GitHub repository.
+*   `GET /api/v1/repositories/{id}/search`: Perform an RRF hybrid search (returns JSON).
+*   `POST /api/v1/repositories/{id}/chat`: Start an SSE streaming chat session with the codebase.
 
-### 1. Backend Setup
-1.  Ensure you have **Python 3.12** installed.
-2.  Install dependencies:
-    ```bash
-    cd backend
-    pip install -r requirements.txt
-    ```
-3.  Ensure local instances of PostgreSQL, Redis, and Qdrant are running and set their connection URIs in your `.env` file.
-4.  Run the API server:
-    ```bash
-    uvicorn app.main:app --reload --port 8000
-    ```
-5.  Start the Celery worker (in a separate terminal):
-    ```bash
-    celery -A app.worker.celery_app worker --loglevel=INFO
-    ```
+---
 
-### 2. Frontend Setup
-1.  Ensure you have **Node.js 20+** installed.
-2.  Install packages:
-    ```bash
-    cd frontend
-    npm install
-    ```
-3.  Run the Next.js development server:
-    ```bash
-    npm run dev
-    ```
+## 🧠 Design Decisions & Trade-offs
 
-### 🧪 Running Tests
-Execute unit and API integration tests in the backend folder:
-```bash
-cd backend
-pytest
-```
+1. **Hybrid Search (RRF) over Pure Vector:** 
+   * *Decision:* Combined keyword and vector search. 
+   * *Trade-off:* Slightly higher latency and storage cost, but drastically improves precision for exact variable names or unique IDs which vector models often miss.
+2. **AST Chunking over Line/Token Chunking:** 
+   * *Decision:* Using Tree-sitter to chunk by semantic symbols (functions/classes). 
+   * *Trade-off:* More complex ingestion pipeline, but prevents cutting functions in half, leading to significantly better LLM context comprehension.
+3. **Celery for Async Ingestion:** 
+   * *Decision:* Offloaded cloning and indexing to background workers.
+   * *Trade-off:* Requires Redis dependency, but keeps the API highly responsive and prevents timeouts on massive repositories.
+
+---
+
+## 🚧 Limitations
+
+*   **Shallow Clones:** Currently only supports `depth=1` clones to save space; historical commit queries are not possible.
+*   **Public Repositories Only:** Cannot ingest private repositories requiring SSH/PAT authentication yet.
+*   **Language Support:** Tree-sitter AST extraction is optimized for a subset of languages (Python, TS/JS, Go). Others fall back to generic chunking.
+
+---
+
+## 🔮 Future Work
+
+*   **GitHub App Integration:** Support for private repository ingestion via OAuth and GitHub App webhooks.
+*   **Automated PR Reviews:** Hook into GitHub Actions to automatically comment on PRs based on the codebase context.
+*   **Graph RAG:** Upgrade from linear hybrid search to a Graph RAG approach using the extracted AST import/export relationships for multi-hop reasoning.

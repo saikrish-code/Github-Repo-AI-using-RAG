@@ -28,7 +28,7 @@ class Repository(Base):
 class CodeChunk(Base):
     __tablename__ = "code_chunks"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    repository_id: Mapped[str] = mapped_column(ForeignKey("repositories.id"), index=True)
+    repository_id: Mapped[str] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
     branch: Mapped[str] = mapped_column(String(255), default="main")
     path: Mapped[str] = mapped_column(String(2048), index=True)
     language: Mapped[str] = mapped_column(String(64), index=True)

@@ -11,17 +11,24 @@ from .indexer import index
 from .models import Repository, User
 from .schemas import ChatRequest, LoginRequest, RegisterRequest, RepoCreate, RepoOut, SearchResult, TokenResponse
 from .security import create_token, current_user, hash_password, verify_password
-from .services import hybrid_search
+from .services import hybrid_search, VectorStore
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 from .worker import index_repository
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        if not db.scalar(select(User).where(User.email == "demo@example.com")):
+            demo_user = User(email="demo@example.com", password_hash=hash_password("demopassword123"))
+            db.add(demo_user)
+            db.commit()
     yield
 app = FastAPI(title="RepoSage API", version="1.0.0", lifespan=lifespan, openapi_url="/api/v1/openapi.json", docs_url="/docs")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-def resolve_llm_config():
+def get_llm_configs() -> list[dict]:
+    configs = []
     cfg = settings()
     provider = (cfg.llm_provider or "auto").lower().strip()
 
@@ -35,7 +42,6 @@ def resolve_llm_config():
 
     is_gemini_key = lambda k: k.startswith("AIzaSy") or k.startswith("AQ.")
 
-    # 1. Google Gemini (explicit provider, GEMINI_API_KEY, AQ./AIzaSy key format, or Gemini base URL)
     if (
         provider == "gemini"
         or gemini_key
@@ -46,110 +52,45 @@ def resolve_llm_config():
         key = gemini_key or (openai_key if is_gemini_key(openai_key) else generic_key)
         if key:
             model = cfg.llm_model or cfg.gemini_model or "gemini-flash-latest"
-            if model == "gemini-2.0-flash":
-                model = "gemini-flash-latest"
+            if model == "gemini-2.0-flash": model = "gemini-flash-latest"
             endpoint = base_url_val if "generativelanguage" in base_url_val else "https://generativelanguage.googleapis.com/v1beta/openai/"
-            return {
-                "name": "Google Gemini",
-                "api_key": key,
-                "base_url": endpoint,
-                "model": model,
-                "headers": {"X-goog-api-key": key},
-            }
+            configs.append({ "name": "Google Gemini", "api_key": key, "base_url": endpoint, "model": model, "headers": {"X-goog-api-key": key} })
 
-    # 2. xkiro (starts with sk-xt- or explicit provider)
     if provider == "xkiro" or openai_key.startswith("sk-xt-") or generic_key.startswith("sk-xt-"):
         key = (openai_key if openai_key.startswith("sk-xt-") else generic_key) or cfg.llm_api_key
         if key:
-            return {
-                "name": "xkiro (DeepSeek)",
-                "api_key": key.strip(),
-                "base_url": "https://api.xkiro.com/v1",
-                "model": cfg.llm_model or "deepseek/deepseek-v4-pro",
-                "headers": {},
-            }
+            configs.append({ "name": "xkiro (DeepSeek)", "api_key": key.strip(), "base_url": "https://api.xkiro.com/v1", "model": cfg.llm_model or "deepseek/deepseek-v4-pro", "headers": {} })
 
-    # 3. OpenRouter (starts with sk-or-v1- or explicit provider)
     if provider == "openrouter" or openrouter_key or openai_key.startswith("sk-or-v1-") or generic_key.startswith("sk-or-v1-"):
         key = openrouter_key or (openai_key if openai_key.startswith("sk-or-v1-") else generic_key)
         if key:
-            return {
-                "name": "OpenRouter",
-                "api_key": key,
-                "base_url": "https://openrouter.ai/api/v1",
-                "model": cfg.llm_model or cfg.openrouter_model or "nex-agi/nex-n2.5-mini:free",
-                "headers": {
-                    "HTTP-Referer": "http://localhost:3000",
-                    "X-Title": "RepoSage",
-                },
-            }
+            configs.append({ "name": "OpenRouter", "api_key": key, "base_url": "https://openrouter.ai/api/v1", "model": cfg.llm_model or cfg.openrouter_model or "meta-llama/llama-3.1-8b-instruct", "headers": { "HTTP-Referer": "http://localhost:3000", "X-Title": "RepoSage" } })
 
-    # 4. Groq (starts with gsk_ or explicit provider)
     if provider == "groq" or groq_key or openai_key.startswith("gsk_") or generic_key.startswith("gsk_"):
         key = groq_key or (openai_key if openai_key.startswith("gsk_") else generic_key)
         if key:
-            return {
-                "name": "Groq",
-                "api_key": key,
-                "base_url": "https://api.groq.com/openai/v1",
-                "model": cfg.llm_model or cfg.groq_model or "llama-3.3-70b-versatile",
-                "headers": {},
-            }
+            configs.append({ "name": "Groq", "api_key": key, "base_url": "https://api.groq.com/openai/v1", "model": cfg.llm_model or cfg.groq_model or "gemma2-9b-it", "headers": {} })
 
-    # 5. DeepSeek
     if provider == "deepseek" or deepseek_key:
         key = deepseek_key or generic_key
         if key:
-            return {
-                "name": "DeepSeek",
-                "api_key": key,
-                "base_url": "https://api.deepseek.com/v1",
-                "model": cfg.llm_model or cfg.deepseek_model or "deepseek-chat",
-                "headers": {},
-            }
+            configs.append({ "name": "DeepSeek", "api_key": key, "base_url": "https://api.deepseek.com/v1", "model": cfg.llm_model or cfg.deepseek_model or "deepseek-chat", "headers": {} })
 
-    # 6. Ollama (Local free models, zero cost, no key needed)
     if provider == "ollama":
-        return {
-            "name": "Ollama (Local)",
-            "api_key": "ollama",
-            "base_url": cfg.ollama_base_url or "http://host.docker.internal:11434/v1",
-            "model": cfg.llm_model or cfg.ollama_model or "llama3",
-            "headers": {},
-        }
+        configs.append({ "name": "Ollama (Local)", "api_key": "ollama", "base_url": cfg.ollama_base_url or "http://host.docker.internal:11434/v1", "model": cfg.llm_model or cfg.ollama_model or "llama3", "headers": {} })
 
-    # 7. Custom / Generic OpenAI-compatible endpoint (LLM_BASE_URL)
     if base_url_val:
         name = "xkiro (DeepSeek)" if "xkiro" in base_url_val.lower() else f"Custom ({base_url_val})"
         default_model = "deepseek/deepseek-v4-pro" if "xkiro" in base_url_val.lower() else "gpt-4o-mini"
-        return {
-            "name": name,
-            "api_key": (generic_key or openai_key or "not-needed"),
-            "base_url": base_url_val,
-            "model": cfg.llm_model or default_model,
-            "headers": {},
-        }
+        configs.append({ "name": name, "api_key": (generic_key or openai_key or "not-needed"), "base_url": base_url_val, "model": cfg.llm_model or default_model, "headers": {} })
 
-    # 8. OpenAI
     if openai_key and not openai_key.startswith("sk-or-v1-") and not is_gemini_key(openai_key) and not openai_key.startswith("gsk_"):
-        return {
-            "name": "OpenAI",
-            "api_key": openai_key,
-            "base_url": None,
-            "model": cfg.llm_model or cfg.openai_model or "gpt-4o-mini",
-            "headers": {},
-        }
+        configs.append({ "name": "OpenAI", "api_key": openai_key, "base_url": None, "model": cfg.llm_model or cfg.openai_model or "gpt-4o-mini", "headers": {} })
 
     if generic_key:
-        return {
-            "name": "OpenAI-compatible",
-            "api_key": generic_key,
-            "base_url": None,
-            "model": cfg.llm_model or "gpt-4o-mini",
-            "headers": {},
-        }
+        configs.append({ "name": "OpenAI-compatible", "api_key": generic_key, "base_url": None, "model": cfg.llm_model or "gpt-4o-mini", "headers": {} })
 
-    return None
+    return configs
 
 @app.get("/health")
 def health(): return {"status": "ok"}
@@ -219,6 +160,10 @@ def repository(repository_id: str, user: User = Depends(current_user), db: Sessi
 def delete_repository(repository_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     repo = db.get(Repository, repository_id)
     if not repo or repo.owner_id != user.id: raise HTTPException(404, "Repository not found")
+    try:
+        VectorStore().get_client().delete(VectorStore.collection, points_selector=Filter(must=[FieldCondition(key="repository_id", match=MatchValue(value=repo.id))]))
+    except Exception:
+        pass
     db.delete(repo); db.commit()
 
 @app.post("/api/v1/repositories/{repository_id}/index")
@@ -251,8 +196,9 @@ def chat(repository_id: str, request: ChatRequest, user: User = Depends(current_
             yield "event: done\ndata: {}\n\n"
             return
 
-        llm_config = resolve_llm_config()
-        if llm_config:
+        llm_configs = get_llm_configs()
+        last_error_notice = ""
+        for llm_config in llm_configs:
             try:
                 from openai import AsyncOpenAI
                 client = AsyncOpenAI(
@@ -295,32 +241,34 @@ def chat(repository_id: str, request: ChatRequest, user: User = Depends(current_
                 err_str = str(e)
                 provider_name = llm_config["name"]
                 if "User not found" in err_str:
-                    err_notice = (
+                    last_error_notice = (
                         f"> **{provider_name} Notice:** Authentication failed (User not found). "
                         f"Your OpenRouter key was rejected by OpenRouter. Please generate a fresh key from [openrouter.ai/keys](https://openrouter.ai/keys) and verify your email at OpenRouter.\n\n"
                         f"Showing the offline AST code intelligence summary below:\n\n"
                     )
                 elif "invalid_api_key" in err_str or "Incorrect API key" in err_str or "401" in err_str:
-                    err_notice = (
+                    last_error_notice = (
                         f"> **{provider_name} Notice:** Authentication failed (Error 401 - Invalid API Key). "
                         f"Please verify your key in the `.env` file.\n\n"
                         f"Showing the offline AST code intelligence summary below:\n\n"
                     )
                 elif "insufficient_quota" in err_str or "credit_balance_exhausted" in err_str or "429" in err_str:
-                    err_notice = (
+                    last_error_notice = (
                         f"> **{provider_name} Notice:** Quota or rate limit reached (Error 429 - Insufficient credits). "
                         f"You can switch to another model provider (such as Gemini, Groq, or Ollama) in `.env`.\n\n"
                         f"Showing the offline AST code intelligence summary below:\n\n"
                     )
                 elif "503" in err_str or "UNAVAILABLE" in err_str:
-                    err_notice = (
+                    last_error_notice = (
                         f"> **{provider_name} Notice:** Service temporarily busy / high demand (Error 503). "
                         f"Please retry your prompt in a few moments.\n\n"
                         f"Showing the offline AST code intelligence summary below:\n\n"
                     )
                 else:
-                    err_notice = f"> **{provider_name} Error:** {err_str}\n\nShowing the offline AST code intelligence summary below:\n\n"
-                for token in err_notice.split(" "): yield f"event: token\ndata: {json.dumps(token + ' ')}\n\n"
+                    last_error_notice = f"> **{provider_name} Error:** {err_str}\n\nShowing the offline AST code intelligence summary below:\n\n"
+                continue
+        if llm_configs and last_error_notice:
+            for token in last_error_notice.split(" "): yield f"event: token\ndata: {json.dumps(token + ' ')}\n\n"
 
         # Deterministic / Offline RAG synthesis (runs when no provider key is configured or provider errors)
         summary_intro = (

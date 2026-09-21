@@ -40,7 +40,7 @@ def chunks_for_file(path: Path, root: Path) -> Iterator[dict]:
         for segment_start in range(start, end + 1, 180):
             segment_end = min(end, segment_start + 219)
             body = "\n".join(lines[segment_start - 1:segment_end])
-            if body.strip(): yield {"path": str(path.relative_to(root)).replace("\\", "/"), "language": language(path), "symbol_name": names[index], "symbol_kind": "symbol" if names[index] else "module", "start_line": segment_start, "end_line": segment_end, "content": body, "imports": re.findall(r"(?:import|from|require)\s*[\(\s]*[\"']?([\w./@-]+)", body), "exports": re.findall(r"(?:export|__all__)\s+(?:default\s+)?([\w$]+)", body)}
+            if body.strip(): yield {"path": str(path.relative_to(root)).replace("\\", "/"), "language": language(path), "symbol_name": names[index], "symbol_kind": "symbol" if names[index] else "module", "start_line": segment_start, "end_line": segment_end, "content": body, "imports": re.findall(r"(?:import|from|require)\s*[\(\s]*[\"']?([\w./@-]+)", body) if language(path) not in ("Markdown", "Text", "JSON", "YAML", "HTML", "CSS") else [], "exports": re.findall(r"(?:export|__all__)\s+(?:default\s+)?([\w$]+)", body)}
 
 class Embedder:
     dimension = 64
