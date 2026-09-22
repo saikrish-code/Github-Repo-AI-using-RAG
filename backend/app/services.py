@@ -1,4 +1,4 @@
-import hashlib, math, re
+import hashlib, math, re, os
 from collections import Counter
 from pathlib import Path
 from typing import Iterator
@@ -20,6 +20,20 @@ def chunks_for_file(path: Path, root: Path) -> Iterator[dict]:
     except (UnicodeDecodeError, OSError): return
     lines = text.splitlines()
     if not lines: return
+
+    chunk_mode = os.environ.get("CHUNK_MODE", "ast")
+    if chunk_mode == "fixed":
+        chunk_size = 50
+        overlap = 10
+        for i in range(0, len(lines), chunk_size - overlap):
+            segment_start = i + 1
+            segment_end = min(len(lines), i + chunk_size)
+            if segment_start > segment_end: break
+            body = "\n".join(lines[segment_start - 1:segment_end])
+            if body.strip():
+                yield {"path": str(path.relative_to(root)).replace("\\", "/"), "language": language(path), "symbol_name": None, "symbol_kind": "module", "start_line": segment_start, "end_line": segment_end, "content": body, "imports": [], "exports": []}
+            if segment_end == len(lines): break
+        return
 
     matches = list(SYMBOL.finditer(text))
     starts = [text[:m.start()].count("\n") + 1 for m in matches]

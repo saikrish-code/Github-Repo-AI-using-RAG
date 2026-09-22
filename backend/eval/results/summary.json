@@ -1,0 +1,96 @@
+{
+  "timestamp": 1790014345.6444578,
+  "config": {
+    "num_questions": 50,
+    "chunk_modes": [
+      "ast",
+      "fixed"
+    ],
+    "llm": "meta-llama/llama-3.3-70b-instruct:free",
+    "embedder": "local_bag_of_words_64d",
+    "k_values": [
+      1,
+      3,
+      5,
+      10
+    ]
+  },
+  "results": {
+    "hybrid_ast": {
+      "precision@1": 0.04,
+      "recall@1": 0.04,
+      "hit_rate@1": 0.04,
+      "precision@3": 0.02,
+      "recall@3": 0.06,
+      "hit_rate@3": 0.06,
+      "precision@5": 0.012000000000000002,
+      "recall@5": 0.06,
+      "hit_rate@5": 0.06,
+      "precision@10": 0.012,
+      "recall@10": 0.1,
+      "hit_rate@10": 0.1,
+      "mrr": 0.052000000000000005,
+      "ndcg@10": 0.06957210693518487,
+      "latency_p50": 72.65901565551758,
+      "latency_p95": 80.88469505310059,
+      "latency_p99": 286.7293357849121
+    },
+    "vector_ast": {
+      "precision@1": 0.02,
+      "recall@1": 0.02,
+      "hit_rate@1": 0.02,
+      "precision@3": 0.02,
+      "recall@3": 0.06,
+      "hit_rate@3": 0.06,
+      "precision@5": 0.016,
+      "recall@5": 0.06,
+      "hit_rate@5": 0.06,
+      "precision@10": 0.01,
+      "recall@10": 0.08,
+      "hit_rate@10": 0.08,
+      "mrr": 0.042222222222222223,
+      "ndcg@10": 0.05987132121760579,
+      "latency_p50": 48.482418060302734,
+      "latency_p95": 53.375244140625,
+      "latency_p99": 56.80227279663086
+    },
+    "keyword_ast": {
+      "precision@1": 0.02,
+      "recall@1": 0.02,
+      "hit_rate@1": 0.02,
+      "precision@3": 0.02,
+      "recall@3": 0.06,
+      "hit_rate@3": 0.06,
+      "precision@5": 0.016,
+      "recall@5": 0.08,
+      "hit_rate@5": 0.08,
+      "precision@10": 0.022000000000000002,
+      "recall@10": 0.16,
+      "hit_rate@10": 0.16,
+      "mrr": 0.049246031746031746,
+      "ndcg@10": 0.0923174319852843,
+      "latency_p50": 24.055957794189453,
+      "latency_p95": 29.891252517700195,
+      "latency_p99": 31.550168991088867
+    },
+    "hybrid_fixed": {
+      "precision@1": 0.02,
+      "recall@1": 0.02,
+      "hit_rate@1": 0.02,
+      "precision@3": 0.013333333333333332,
+      "recall@3": 0.02,
+      "hit_rate@3": 0.02,
+      "precision@5": 0.012000000000000002,
+      "recall@5": 0.04,
+      "hit_rate@5": 0.04,
+      "precision@10": 0.01,
+      "recall@10": 0.06,
+      "hit_rate@10": 0.06,
+      "mrr": 0.027222222222222224,
+      "ndcg@10": 0.053919392812843296,
+      "latency_p50": 68.37153434753418,
+      "latency_p95": 84.07378196716309,
+      "latency_p99": 98.21343421936035
+    }
+  }
+}
