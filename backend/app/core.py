@@ -1,8 +1,9 @@
+from pathlib import Path
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=(str(Path(__file__).resolve().parent.parent / ".env"), ".env"), extra="ignore")
     database_url: str = "sqlite:///./reposage.db"
     redis_url: str = "redis://redis:6379/0"
     qdrant_url: str = "http://qdrant:6333"
@@ -25,7 +26,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-flash-latest"
 
     groq_api_key: str | None = None
-    groq_model: str = "gemma2-9b-it"
+    groq_model: str = "qwen/qwen3.8-27b"
 
     openrouter_api_key: str | None = None
     openrouter_model: str = "nex-agi/nex-n2.5-mini:free"
